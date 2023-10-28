@@ -18,7 +18,7 @@
 int main() 
 {
     printf("Trying to connect to the server...\n");
-    fflush(stdout);
+    fflush(stdout); // a must, ensures that every message in the buffer is written to the console each time we are using printf()
     if (access(write_channel, F_OK) == -1) 
     {
         if (mkfifo(write_channel, 0666) == -1)
@@ -47,14 +47,18 @@ int main()
         perror("Error at opening read channel");
         exit(1);
     }
-    printf("Connected to the server!\n");
+    /// diplay this message in the client to notify the user that the client connected to the server
+    /// (the fifo are can be accesed by the client and the server)
+    printf("Connected to the server!\n"); 
     fflush(stdout);
     while (1)
     {
         char buffer[NMAX] = {0};
-        int buffer_size = 0;
-        buffer_size = read(READ, buffer, NMAX);
-        if (buffer_size == -1)
+        int buffer_fd = 0;
+        printf("%s", "Command: ");
+        fflush(stdout);
+        buffer_fd = read(READ, buffer, NMAX);
+        if (buffer_fd == -1)
         {
             perror("Error reading the input");
             exit(1);
@@ -65,21 +69,24 @@ int main()
             perror("Error writing in the channel");
             exit(1);
         }
-        if (!strncmp(buffer, "quit", 4))
+        if (!strncmp(buffer, "quit", 4) && strlen(buffer) == 5) /// quit the client, but the server will still be on
         {
             close(fd_write);
             unlink(read_channel);
             exit(0);
         }
         // sleep(1);
+        // get the server response, the exception is "quit" command which doesn't return a message to the client.
         char server_response[NMAX] = {0};
-        int response_size = 0;
-        response_size = read(fd_read, server_response, NMAX);
-        if (response_size == -1)
+        int response_fd = 0;
+        response_fd = read(fd_read, server_response, NMAX);
+        if (response_fd == -1)
         {
             perror("Error reading from the channel");
             exit(1);
         }
+        printf("Server response size: %ld\n", strlen(server_response));
+        fflush(stdout);
         printf("%s", server_response);
         fflush(stdout);
     }
