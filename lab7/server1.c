@@ -125,7 +125,7 @@ void raspunde(void *arg)
 		printf("[Thread %d]\n",tdL.idThread);
 		perror ("Eroare la read() de la client.\n");
 	}
-	printf ("[Thread %d]Mesajul a fost receptionat...%d\n",tdL.idThread, nr); 
+	printf("[Thread %d]Mesajul a fost receptionat...%d\n",tdL.idThread, nr); 
 	/*pregatim mesajul de raspuns */
 	nr++;      
 	printf("[Thread %d]Trimitem mesajul inapoi...%d\n",tdL.idThread, nr);
