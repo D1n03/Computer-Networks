@@ -30,8 +30,9 @@ char message_from_client[NMAX];
 static void *treat(void *);
 void answer(void *);
 
-int login_check(const char * email, const char * password)
+int check_login_credentials(const char * email, const char * password, char * username)
 {
+    int found = 0;
     FILE * file = fopen(db, "r");
     if (file == NULL)
     {
@@ -40,20 +41,26 @@ int login_check(const char * email, const char * password)
     }
     else {
         char line[NMAX];
-        while (fgets(line, sizeof(line), file) != NULL)
+        while (fgets(line, sizeof(line), file) != NULL && !found)
         {
-            char * get_email = strtok(line, " ");
+            char * get_username = strtok(line, " ");
+            char * get_email = strtok(NULL, " ");
             char * get_password = strtok(NULL, "\n");
             if (!strcmp(email, get_email) && !strcmp(password, get_password))
-                return 1;
+            {
+                strcpy(username, get_username);
+                found = 1;
+            }
         }
     }
     fclose(file);
-    return 0;
+    return found;
 }
 
-int register_account(const char * email, const char * password)
+int register_account(const char* username, const char * email, const char * password)
 {
+    if(strchr(email, '@') == NULL)
+        return -1; // email invalid
     int bytes;
     FILE *file = fopen(db, "a+");
     if(file == NULL)
@@ -66,32 +73,33 @@ int register_account(const char * email, const char * password)
         char line[NMAX];
         while(fgets(line,sizeof(line),file) != NULL)
         {
-            char *get_email = strtok(line," ");
-            char *get_password = strtok(NULL,"\n");
-            if(!strcmp(email,get_email))
-                return 0; // this account doesnt exist
+            char *get_username = strtok(line, " ");
+            char *get_email = strtok(NULL, " ");
+            if(!strcmp(username, get_username))
+                return 0; // the username is already used be another client
+            if(!strcmp(email, get_email))
+                return 1; // the email is already used be another client
         }
-        if(strchr(email,'@') == NULL)
-            return -1; //email invalid
-        char user[NMAX];
-        bzero(user,200);
-        user[0]='\0';
-        strcat(user, email);
-        strcat(user, " ");
-        strcat(user, password);
-        strcat(user, "\n");
-        bytes = fprintf(file,"%s", user);
-        if(bytes <=0 )
+        char user_data[NMAX];
+        bzero(user_data, NMAX);
+        strcat(user_data, username);
+        strcat(user_data, " ");
+        strcat(user_data, email);
+        strcat(user_data, " ");
+        strcat(user_data, password);
+        strcat(user_data, "\n");
+        bytes = fprintf(file, "%s", user_data);
+        if(bytes <= 0)
         {
             perror("[server] Error at fprintf(1).\n");
             return errno;
         }
     }
     fclose(file);
-    return 1;
+    return 2;
 }
 
-void add_to_struct(thData *client)
+void add_client(thData *client)
 {
     for (int i = 0; i < 100; i++)
         if (clients[i] == NULL)
@@ -101,7 +109,7 @@ void add_to_struct(thData *client)
         }
 }
 
-void remove_from_struct(thData *client)
+void remove_client(thData *client)
 {
     for(int i = 0; i < 100; i++)
         if(clients[i] == client)
@@ -122,8 +130,8 @@ int message_id(const char * fisier)
     }
     else 
     {
-        char line[200];
-        while(fgets(line,sizeof(line),file) != NULL)
+        char line[NMAX];
+        while(fgets(line,sizeof(line), file) != NULL)
         {
             id += 1;
         }
@@ -223,7 +231,7 @@ void answer(void *arg)
                 char email[NMAX], password[NMAX];
                 bzero(email, NMAX);
                 bzero(password, NMAX);
-                strcpy(message_for_client, "Insert email: \n");
+                strcpy(message_for_client, "Insert email: ");
                 if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
@@ -234,7 +242,7 @@ void answer(void *arg)
                     printf("[Thread %d]\n",tdL->idThread);
                     perror ("Error at read(2) from the client.\n");
                 }
-                strcpy(message_for_client, "Insert password: \n");
+                strcpy(message_for_client, "Insert password: ");
                 if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
@@ -245,16 +253,12 @@ void answer(void *arg)
                     printf("[Thread %d]\n",tdL->idThread);
                     perror ("Error at read(3) from the client.\n");
                 }
-                int ok = login_check(email, password);
-                if (ok)
+                char *username = malloc(64);
+                int result = check_login_credentials(email, password, username);
+                printf("%s\n", username);
+                fflush(stdout);
+                if (result)
                 {
-                    char username[64] = {0};
-                    int i = 0;
-                    while (email[i] != '@')
-                    {
-                        username[i] = email[i];
-                        i += 1;
-                    }
                     int connected = 0;
                     for (int i = 0; i < 100; i++)
                         if (clients[i] != NULL && !strcmp(clients[i]->username, username))
@@ -263,7 +267,7 @@ void answer(void *arg)
                         strcpy(message_for_client, "You are already connected\n");
                     else 
                     {
-                        add_to_struct(tdL);
+                        add_client(tdL);
                         is_logged = 1;
                         strcpy(tdL->username, username);
 
@@ -272,12 +276,12 @@ void answer(void *arg)
                         int id = message_id(file);
                         char id_c[5];
                         sprintf(id_c, "%d", id);
-                        strcpy(message_for_client, "You have connected succesfully!");
+                        strcpy(message_for_client, "You have connected succesfully! ");
                         strcat(message_for_client, "You have ");
                         strcat(message_for_client, id_c);
                         strcat(message_for_client, " unread messages!\n");
 
-                        printf("The user %s connected to the server.\n", email);
+                        printf("The user %s connected to the server.\n", tdL->username);
                         printf("The user %s is online.\n", tdL->username);
                     }
                 }
@@ -290,6 +294,7 @@ void answer(void *arg)
                     printf("[Thread %d]\n",tdL->idThread);
                     perror ("Error at write(3) to the client.\n");
                 }
+                free(username);
             }
             else 
             {
@@ -305,56 +310,68 @@ void answer(void *arg)
         {
             if (!is_logged)
             {
-                char email[NMAX], password[NMAX];
+                char username[NMAX], email[NMAX], password[NMAX];
+                bzero(username, NMAX);
                 bzero(email, NMAX);
                 bzero(password, NMAX);
-                strcpy(message_for_client, "Insert email: \n");
+                strcpy(message_for_client, "Insert username: ");
                 if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror ("Error at write(5) to the client.\n");
                 }
-                if ((bytes = read(tdL->cl, email, sizeof(email))) <= 0)
+                if ((bytes = read(tdL->cl, username, sizeof(username))) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror ("Error at read(4) from the client.\n");
                 }
-                strcpy(message_for_client, "Insert password: \n");
+                strcpy(message_for_client, "Insert email: ");
                 if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror ("Error at write(6) to the client.\n");
                 }
-                if ((bytes = read(tdL->cl, password, sizeof(password))) <= 0)
+                if ((bytes = read(tdL->cl, email, sizeof(email))) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror ("Error at read(5) from the client.\n");
+                }
+                strcpy(message_for_client, "Insert password: ");
+                if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
+                {
+                    printf("[Thread %d]\n",tdL->idThread);
+                    perror ("Error at write(7) to the client.\n");
+                }
+                if ((bytes = read(tdL->cl, password, sizeof(password))) <= 0)
+                {
+                    printf("[Thread %d]\n",tdL->idThread);
+                    perror ("Error at read(6) from the client.\n");
                 }  
-                int ok = register_account(email, password); 
-                if (ok == -1)
+                int ok = register_account(username, email, password); 
+                switch (ok)
                 {
+                case -1: 
                     strcpy(message_for_client, "Email invalid\n");
-                }
-                else if (!ok)
-                {
-                    strcpy(message_for_client,"\nThis account already exists.\n");
-                }
-                else 
-                {
-                    add_to_struct(tdL);
-                    is_logged = 1;
-                    char username[64] = {0};
-                    int i = 0;
-                    while (email[i] != '@')
-                    {
-                        username[i] = email[i];
-                        i += 1;
-                    }
-                    strcpy(tdL->username, username);
-                    strcpy(message_for_client, "Your account has been created succesfully!\n");
+                    break;
 
-                    printf("The user %s connected to the server.\n", email);
-                    printf("The user %s is online.\n", tdL->username);
+                case 0: 
+                    strcpy(message_for_client, "The username is already being used by another account\n");
+                    break;
+
+                case 1: 
+                    strcpy(message_for_client, "The email is already being used by another account\n");
+                    break;
+
+                case 2:  
+                    add_client(tdL);
+                    strcpy(tdL->username, username);
+                    strcpy(message_for_client, "The account has been created succesfully!\n");
+
+                    printf("The account with the username %s and email %s has been created.\n", tdL->username, email);
+                    break;
+                
+                default:
+                    break;
                 }
                 if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
                 {
@@ -364,13 +381,17 @@ void answer(void *arg)
             }
             else 
             {
-                strcpy(message_for_client, "You are already connected with another account\n");
+                strcpy(message_for_client, "Logout from the current accound if you want to create a new one.\n");
                 if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror ("Error at write(8) to the client.\n");
                 }
             }
+        }
+        else if (!strncmp(message_from_client, "Logout", 4))
+        {
+
         }
         else if (!strncmp(message_from_client, "Quit", 4))
         {
@@ -384,7 +405,7 @@ void answer(void *arg)
                 remove(file);
             }
             is_logged = 0;
-            remove_from_struct(tdL);
+            remove_client(tdL);
             break;
         }
         else 
