@@ -194,7 +194,7 @@ int main ()
 
 	    pthread_create(&th[id], NULL, &treat, td);	      
 				
-	}//while    
+	}  
 };			
 
 static void *treat(void * arg)
@@ -255,8 +255,6 @@ void answer(void *arg)
                 }
                 char *username = malloc(64);
                 int result = check_login_credentials(email, password, username);
-                printf("%s\n", username);
-                fflush(stdout);
                 if (result)
                 {
                     int connected = 0;
@@ -276,7 +274,7 @@ void answer(void *arg)
                         int id = message_id(file);
                         char id_c[5];
                         sprintf(id_c, "%d", id);
-                        strcpy(message_for_client, "You have connected succesfully! ");
+                        strcpy(message_for_client, "You have connected successfully! ");
                         strcat(message_for_client, "You have ");
                         strcat(message_for_client, id_c);
                         strcat(message_for_client, " unread messages!\n");
@@ -389,9 +387,29 @@ void answer(void *arg)
                 }
             }
         }
-        else if (!strncmp(message_from_client, "Logout", 4))
+        else if (!strncmp(message_from_client, "Logout", 6))
         {
+            if (!is_logged)
+                strcpy(message_for_client, "You are not connected!\nLogin\nRegister\nQuit\n");
+            else 
+            {
+                printf("The user %s is offline!\n", tdL->username);
 
+                if (view_msg_status)
+                {
+                    char file[NMAX];
+                    sprintf(file, "%s_received.txt", tdL->username);
+                    remove(file);
+                }
+                is_logged = 0;
+                remove_client(tdL);
+                strcpy(message_for_client, "You have successfully logout!\nLogin\nRegister\nQuit\n");
+            }
+            if (write (tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+            {
+                printf("[Thread %d] ",tdL->idThread);
+                perror ("[Thread] Error at write() to the client.\n");
+            }
         }
         else if (!strncmp(message_from_client, "Quit", 4))
         {
@@ -416,7 +434,7 @@ void answer(void *arg)
                 printf("[Thread %d] ",tdL->idThread);
                 perror ("[Thread] Error at write() to the client.\n");
             }
-            else printf ("[Thread %d] The message has been sent succesfully.\n",tdL->idThread);	
+            else printf ("[Thread %d] The message has been sent successfully.\n",tdL->idThread);	
         }
         bzero(message_for_client, NMAX);
     }
