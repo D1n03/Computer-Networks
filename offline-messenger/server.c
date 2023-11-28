@@ -13,7 +13,7 @@
 
 #define PORT 2908
 #define NMAX 256
-#define db "database.txt"
+#define db_accounts "database_accounts.db"
 
 extern int errno;
 
@@ -31,72 +31,111 @@ char message_from_client[NMAX];
 static void *treat(void *);
 void answer(void *);
 
+struct UserInfo {
+    char username[64];
+    int found;
+};
+
+int check_login_callback(void *data, int argc, char **argv, char **col_names) 
+{
+    struct UserInfo *user_info = (struct UserInfo *)data;
+    user_info->found = 1;
+    if (argc > 0) {
+        strncpy(user_info->username, argv[0], 63);
+        user_info->username[63] = '\0';
+    }
+    return 0;
+}
+
 int check_login_credentials(const char * email, const char * password, char * username)
 {
-    int found = 0;
-    FILE * file = fopen(db, "r");
-    if (file == NULL)
-    {
-        perror("[server] Error at fopen(1)");
+    sqlite3 *db;
+    struct UserInfo user_info;
+    user_info.found = 0;
+    int rc = sqlite3_open(db_accounts, &db);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
         return errno;
     }
-    else {
-        char line[NMAX];
-        while (fgets(line, sizeof(line), file) != NULL && !found)
-        {
-            char * get_username = strtok(line, " ");
-            char * get_email = strtok(NULL, " ");
-            char * get_password = strtok(NULL, "\n");
-            if (!strcmp(email, get_email) && !strcmp(password, get_password))
-            {
-                strcpy(username, get_username);
-                found = 1;
-            }
-        }
+    char select_query[NMAX];
+    sprintf(select_query, "SELECT username FROM users WHERE email='%s' AND password='%s';", email, password);
+
+    sqlite3_exec(db, select_query, check_login_callback, &user_info, 0);
+    sqlite3_close(db);
+    strcpy(username, user_info.username);
+    return user_info.found;
+}
+
+int check_existing_callback(void *exists, int argc, char **argv, char **col_names) {
+    int *exists_flag = (int *)exists;
+    *exists_flag = 1; // set the flag to indicate that the username or email exists
+    return 0;
+}
+
+int check_existing(sqlite3 *db, const char *field, const char *value) 
+{
+    char check_query[NMAX];
+    sprintf(check_query, "SELECT COUNT(*) FROM users WHERE %s='%s';", field, value);
+    int exists_flag = 0;
+    int rc = sqlite3_exec(db, check_query, check_existing_callback, &exists_flag, 0);
+
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Failed to execute SELECT query: %s\n", sqlite3_errmsg(db));
+        return errno;
     }
-    fclose(file);
-    return found;
+    return exists_flag;
 }
 
 int register_account(const char* username, const char * email, const char * password)
 {
     if(strchr(email, '@') == NULL)
         return -1; // email invalid
-    int bytes;
-    FILE *file = fopen(db, "a+");
-    if(file == NULL)
-    {
-        perror("[server] Error at open(3).\n");
+
+    sqlite3 *db;
+    int rc = sqlite3_open(db_accounts, &db);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
+        perror("[server] Error at sqlite3_open.\n");
         return errno;
     }
-    else 
+    char *create_table_query = "CREATE TABLE IF NOT EXISTS users ("
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                        "username TEXT NOT NULL,"
+                        "email TEXT NOT NULL,"
+                        "password TEXT NOT NULL);";
+
+    rc = sqlite3_exec(db, create_table_query, 0, 0, 0);
+
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Failed to create table: %s\n", sqlite3_errmsg(db));
+        perror("[server] Error at sqlite3_create.\n");
+        sqlite3_close(db);
+        return errno;
+    } 
+
+    if (!check_existing(db, "username", username))
     {
-        char line[NMAX];
-        while(fgets(line,sizeof(line),file) != NULL)
-        {
-            char *get_username = strtok(line, " ");
-            char *get_email = strtok(NULL, " ");
-            if(!strcmp(username, get_username))
-                return 0; // the username is already used be another client
-            if(!strcmp(email, get_email))
-                return 1; // the email is already used be another client
-        }
-        char user_data[NMAX];
-        bzero(user_data, NMAX);
-        strcat(user_data, username);
-        strcat(user_data, " ");
-        strcat(user_data, email);
-        strcat(user_data, " ");
-        strcat(user_data, password);
-        strcat(user_data, "\n");
-        bytes = fprintf(file, "%s", user_data);
-        if(bytes <= 0)
-        {
-            perror("[server] Error at fprintf(1).\n");
-            return errno;
-        }
+        sqlite3_close(db);
+        return 0;
     }
-    fclose(file);
+
+    if (!check_existing(db, "email", email))
+    {
+        sqlite3_close(db);
+        return 1;
+    }
+    
+    char insert_query[NMAX];
+    sprintf(insert_query, "INSERT INTO users (username, email, password) VALUES ('%s', '%s', '%s');", username, email, password);
+    rc = sqlite3_exec(db, insert_query, 0, 0, 0);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Failed to insert data: %s\n", sqlite3_errmsg(db));
+        perror("[server] Error at sqlite3_exec.\n");
+        sqlite3_close(db);
+        return errno;
+    }
+    printf("[server] Data inserted successfully!\n");
+    sqlite3_close(db);
     return 2;
 }
 
@@ -141,25 +180,35 @@ int message_id(const char * fisier)
     return id;
 }
 
+int get_users_callback(void *data, int argc, char **argv, char **col_names) 
+{
+    char *get_data = (char *)data;
+    for (int i = 0; i < argc; i++) {
+        strcat(get_data, argv[i]);
+        strcat(get_data, "\n");
+    }
+    return 0;
+}
+
 void get_users()
 {
-    FILE *file = fopen(db,"r");
-    if(file == NULL)
-        perror("[server] Error at fopen(1).\n");
-    else 
-    {
-        char line[NMAX], get_data[1024] = {0};
-        bzero(get_data, 1024);
-        strcat(get_data, "The existing users are:\n");
-        while(fgets(line, sizeof(line), file) != NULL)
-        {
-            char * username = strtok(line, " ");
-            strcat(get_data, username);
-            strcat(get_data, "\n");
-        }
-        strcpy(message_for_client, get_data);
+    sqlite3 * db;
+    int  rc = sqlite3_open(db_accounts, &db);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
+        perror("[server] Error at sqlite3_open.\n");
     }
-    fclose(file);
+    char *select_query = "SELECT username FROM users;";
+    char get_data[1024] = {0};
+    strcat(get_data, "The existing users are:\n");
+    rc = sqlite3_exec(db, select_query, get_users_callback, get_data, 0);
+
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Failed to execute SELECT query: %s\n", sqlite3_errmsg(db));
+        perror("[server] Error at sqlite3_exec.\n");
+    }
+    strcpy(message_for_client, get_data);
+    sqlite3_close(db);
 }
 
 void get_online_users()
@@ -399,7 +448,6 @@ void answer(void *arg)
                     break;
 
                 case 2:  
-                    add_client(tdL);
                     strcpy(tdL->username, username);
                     strcpy(message_for_client, "The account has been created succesfully!\n");
 
@@ -417,7 +465,7 @@ void answer(void *arg)
             }
             else 
             {
-                strcpy(message_for_client, "Logout from the current accound if you want to create a new one.\n");
+                strcpy(message_for_client, "Logout from the current account if you want to create a new one.\n");
                 if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
