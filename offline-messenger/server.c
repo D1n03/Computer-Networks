@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <stdint.h>
+#include <sqlite3.h>
 
 #define PORT 2908
 #define NMAX 256
@@ -140,6 +141,43 @@ int message_id(const char * fisier)
     return id;
 }
 
+void get_users()
+{
+    FILE *file = fopen(db,"r");
+    if(file == NULL)
+        perror("[server] Error at fopen(1).\n");
+    else 
+    {
+        char line[NMAX], get_data[1024] = {0};
+        bzero(get_data, 1024);
+        strcat(get_data, "The existing users are:\n");
+        while(fgets(line, sizeof(line), file) != NULL)
+        {
+            char * username = strtok(line, " ");
+            strcat(get_data, username);
+            strcat(get_data, "\n");
+        }
+        strcpy(message_for_client, get_data);
+    }
+    fclose(file);
+}
+
+void get_online_users()
+{
+    char get_data[1024];
+    bzero(get_data, 1024);
+    strcat(get_data, "The online users are:\n");
+    for (int i = 0; i < 100; i++)
+    {
+        if (clients[i] != NULL)
+        {
+            strcat(get_data, clients[i]->username);
+            strcat(get_data, "\n");
+        }
+    }
+    strcpy(message_for_client, get_data);
+}
+
 int main ()
 {
     struct sockaddr_in server;
@@ -224,7 +262,7 @@ void answer(void *arg)
         }
         printf("The command received: %s\n", message_from_client);
         
-        if (!strncmp(message_from_client, "Login", 5))
+        if (!strncmp(message_from_client, "Login", 5)) // Login using the email and the passowrd
         {
             if (!is_logged) 
             {
@@ -304,7 +342,7 @@ void answer(void *arg)
                 }
             }
         }
-        else if (!strncmp(message_from_client, "Register", 8))
+        else if (!strncmp(message_from_client, "Register", 8)) // Register an account proviving an username, an email and a password
         {
             if (!is_logged)
             {
@@ -374,7 +412,7 @@ void answer(void *arg)
                 if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
-                    perror ("Error at write(7) to the client.\n");
+                    perror ("Error at write(8) to the client.\n");
                 }
             }
             else 
@@ -383,11 +421,53 @@ void answer(void *arg)
                 if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
-                    perror ("Error at write(8) to the client.\n");
+                    perror ("Error at write(9) to the client.\n");
                 }
             }
         }
-        else if (!strncmp(message_from_client, "Logout", 6))
+        else if (!strncmp(message_from_client,"Get users", 9)) /// get the all existing users from the database
+        {
+            if (!is_logged)
+            {
+                strcpy(message_for_client, "You have to be connected if you want to use this command\nLogin\nRegister\nQuit\n");
+                if (write (tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ",tdL->idThread);
+                    perror ("[Thread] Error at write(10) to the client.\n");
+                }
+            }
+            else 
+            {
+                get_users(); /// return all the users from the database
+                if (write (tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ",tdL->idThread);
+                    perror ("[Thread] Error at write(11) to the client.\n");
+                }
+            }
+        }
+        else if (!strncmp(message_from_client, "Get online users", 16)) // get all online users
+        {
+            if (!is_logged)
+            {
+                strcpy(message_for_client, "You have to be connected if you want to use this command\nLogin\nRegister\nQuit\n");
+                if (write (tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ",tdL->idThread);
+                    perror ("[Thread] Error at write(12) to the client.\n");
+                }
+            }
+            else 
+            {
+                get_online_users();
+                if (write (tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ",tdL->idThread);
+                    perror ("[Thread] Error at write(13) to the client.\n");
+                }
+            }
+        }
+        else if (!strncmp(message_from_client, "Logout", 6)) // Logout from the account 
         {
             if (!is_logged)
                 strcpy(message_for_client, "You are not connected!\nLogin\nRegister\nQuit\n");
@@ -411,7 +491,7 @@ void answer(void *arg)
                 perror ("[Thread] Error at write() to the client.\n");
             }
         }
-        else if (!strncmp(message_from_client, "Quit", 4))
+        else if (!strncmp(message_from_client, "Quit", 4)) // Quit the client
         {
             if (is_logged)
                 printf("The user %s is offline.\n", tdL->username);
@@ -439,3 +519,9 @@ void answer(void *arg)
         bzero(message_for_client, NMAX);
     }
 }
+
+// TODO
+// message logic
+// replay logic
+// sqllite db?
+// admin delete account from database and blacklist the email
