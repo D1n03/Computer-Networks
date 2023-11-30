@@ -12,7 +12,7 @@
 #include <sqlite3.h>
 
 #define PORT 2908
-#define NMAX 256
+#define NMAX 1024
 #define db_accounts "database_accounts.db"
 #define db_mess "messages.db"
 
@@ -69,7 +69,13 @@ int check_login_credentials(const char * email, const char * password, char * us
 
 int check_existing_callback(void *exists, int argc, char **argv, char **col_names) {
     int *exists_flag = (int *)exists;
-    *exists_flag = 1; // set the flag to indicate that the username or email exists
+    
+    if (argc > 0 && argv[0] != NULL) {
+        int count = atoi(argv[0]);
+        *exists_flag = (count > 0) ? 1 : 0;
+    } else {
+        *exists_flag = 0; // Set to 0 if there is no result
+    }
     return 0;
 }
 
@@ -160,27 +166,6 @@ void remove_client(thData *client)
         }
 }
 
-int message_id(const char * fisier)
-{
-    int id = 0;
-    FILE *file = fopen(fisier,"r");
-    if(file == NULL)
-    {
-        perror("[server] Error at fopen(1).\n");
-        return 0;
-    }
-    else 
-    {
-        char line[NMAX];
-        while(fgets(line,sizeof(line), file) != NULL)
-        {
-            id += 1;
-        }
-    }
-    fclose(file);
-    return id;
-}
-
 int get_users_callback(void *data, int argc, char **argv, char **col_names) 
 {
     char *get_data = (char *)data;
@@ -251,13 +236,11 @@ int get_id_msg(const char* from_username, const char* to_username)
     sqlite3_bind_text(stmt, 1, from_username, -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 2, to_username, -1, SQLITE_STATIC);
 
-    // Execute the query
     int count = 0;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         count = sqlite3_column_int(stmt, 0);
     }
     sqlite3_finalize(stmt);
-
     sqlite3_close(db);
     return count;
 }
@@ -349,15 +332,137 @@ int send_msg(const char * from_username, const char* to_username, const char * d
     return 1;
 }
 
-int view_received_messages(const char* )
+int replay(const char* from_username, const char* to_username, const char* id_msg_replay, const char * data)
 {
+    if (!strcmp(from_username, to_username))
+        return -2;
+    if (!exist(to_username))
+        return -1;
+    int get_max_id = get_id_msg(to_username, from_username);
+    int id_int = atoi(id_msg_replay);
+    if (id_int < 0 || id_int > get_max_id)
+        return 0;
 
-    return 0;
+    char new_data[NMAX];
+    bzero(new_data, NMAX);
+    sprintf(new_data, "Replay -> [id_msg : %s] [user: %s] <- : %s", id_msg_replay, to_username, data);
+    int ok = send_msg(from_username, to_username, new_data);
+    return ok;
 }
 
-int view_history(const char* ,const char* )
+int view_received_messages(const char* username)
 {
-    return 0;
+    sqlite3 * db;
+    int rc = sqlite3_open(db_mess, &db);
+
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
+        perror("[server] Error at sqlite3_open.\n");
+        return errno;
+    }
+
+    char query[NMAX];
+    bzero(query, NMAX);
+    snprintf(query, sizeof(query), "SELECT id_msg, from_user, data FROM messages WHERE to_user = ? AND view = 0");
+
+    sqlite3_stmt *stmt;
+
+    rc = sqlite3_prepare_v2(db, query, -1, &stmt, 0);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return -1;
+    }
+    sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
+    int ok = 0;
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int id_msg = sqlite3_column_int(stmt, 0);
+        const char *from_username = (const char *)sqlite3_column_text(stmt, 1);
+        const char *data = (const char *)sqlite3_column_text(stmt, 2);
+        char formatted_answer[NMAX];
+        bzero(formatted_answer, NMAX);
+        sprintf(formatted_answer, "[id_msg : %d] [user: %s] : %s", id_msg, from_username, data);
+        strcat(message_for_client, formatted_answer);
+        strcat(message_for_client, "\n");
+
+        snprintf(query, sizeof(query), "UPDATE messages SET view = 1 WHERE id_msg = %d", id_msg);
+        rc = sqlite3_exec(db, query, 0, 0, 0);
+        if (rc != SQLITE_OK) {
+            fprintf(stderr, "Failed to update view column: %s\n", sqlite3_errmsg(db));
+            ok = -1;
+            break;
+        }
+        ok = 1;
+    }
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return ok;
+}
+
+int view_history(const char* from_username, const char* to_username)
+{
+    if (!strcmp(from_username, to_username))
+        return -1;
+    if (!exist(to_username))
+        return 0;
+    sqlite3 * db;
+    int rc = sqlite3_open(db_mess, &db);
+
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
+        perror("[server] Error at sqlite3_open.\n");
+        return errno;
+    }
+
+    char query[NMAX];
+    bzero(query, NMAX);
+    snprintf(query, sizeof(query), "SELECT id_msg, from_user, to_user, data FROM messages "
+             "WHERE (from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?)");
+
+    sqlite3_stmt *stmt;
+
+    rc = sqlite3_prepare_v2(db, query, -1, &stmt, 0);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return -1;
+    }
+    sqlite3_bind_text(stmt, 1, from_username, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, to_username, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, to_username, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 4, from_username, -1, SQLITE_STATIC);
+
+    int ok = 0;
+    char aux[NMAX];
+    bzero(aux, NMAX);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int id_msg = sqlite3_column_int(stmt, 0);
+        const char *from_user = (const char *)sqlite3_column_text(stmt, 1);
+        const char *data = (const char *)sqlite3_column_text(stmt, 3);
+
+        char formatted_answer[NMAX];
+        bzero(formatted_answer, NMAX);
+        snprintf(formatted_answer, NMAX, "[id_msg : %d] [user: %s] : %s", id_msg, from_user, data);
+        strcat(aux, formatted_answer);
+        strcat(aux, "\n");
+
+        snprintf(query, sizeof(query), "UPDATE messages SET view = 1 WHERE id_msg = %d", id_msg);
+        rc = sqlite3_exec(db, query, 0, 0, 0);
+        if (rc != SQLITE_OK) {
+            fprintf(stderr, "Failed to update view column: %s\n", sqlite3_errmsg(db));
+            break;
+        }
+
+        ok = 1;
+    }
+    strcpy(message_for_client, aux);
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+
+    if (ok)
+        return 2;
+    else return 1;
 }
 
 int get_nr_of_unread_msg(const char * username)
@@ -382,7 +487,6 @@ int get_nr_of_unread_msg(const char * username)
 
     sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
 
-    // Execute the query
     int count = 0;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         count = sqlite3_column_int(stmt, 0);
@@ -466,7 +570,7 @@ void answer(void *arg)
 {
 	struct thData *tdL; 
 	tdL = (struct thData*)arg;
-    int bytes, is_logged = 0, view_msg_status = 0;
+    int bytes, is_logged = 0;
     while (1)
     {
         bzero(message_from_client, NMAX);
@@ -600,27 +704,27 @@ void answer(void *arg)
                 int ok = register_account(username, email, password); 
                 switch (ok)
                 {
-                case -1: 
-                    strcpy(message_for_client, "Email invalid\n");
-                    break;
+                    case -1: 
+                        strcpy(message_for_client, "Email invalid\n");
+                        break;
 
-                case 0: 
-                    strcpy(message_for_client, "The username is already being used by another account\n");
-                    break;
+                    case 0: 
+                        strcpy(message_for_client, "The username is already being used by another account\n");
+                        break;
 
-                case 1: 
-                    strcpy(message_for_client, "The email is already being used by another account\n");
-                    break;
+                    case 1: 
+                        strcpy(message_for_client, "The email is already being used by another account\n");
+                        break;
 
-                case 2:  
-                    strcpy(tdL->username, username);
-                    strcpy(message_for_client, "The account has been created succesfully!\n");
+                    case 2:  
+                        strcpy(tdL->username, username);
+                        strcpy(message_for_client, "The account has been created succesfully!\n");
 
-                    printf("The account with the username %s and email %s has been created.\n", tdL->username, email);
-                    break;
-                
-                default:
-                    break;
+                        printf("The account with the username %s and email %s has been created.\n", tdL->username, email);
+                        break;
+                    
+                    default:
+                        break;
                 }
                 if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
                 {
@@ -694,7 +798,7 @@ void answer(void *arg)
             else 
             {
                 char username_from_client[NMAX], data[NMAX];
-                bzero(message_for_client, NMAX);
+                bzero(username_from_client, NMAX);
                 bzero(data, NMAX);
                 strcpy(message_for_client, "Username: ");
                 if (write (tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
@@ -721,18 +825,18 @@ void answer(void *arg)
                 int ok = send_msg(tdL->username, username_from_client, data);
                 switch (ok)
                 {
-                case -1:
-                    strcpy(message_for_client, "You can't send message to yourself\n");
-                    break;
-                 case 0:
-                    strcpy(message_for_client,"This user does not exist\n");
-                    break;
-                 case 1:
-                    strcpy(message_for_client,"Message sent!\n");
-                    break;
+                    case -1:
+                        strcpy(message_for_client, "You can't send message to yourself\n");
+                        break;
+                    case 0:
+                        strcpy(message_for_client,"This user does not exist\n");
+                        break;
+                    case 1:
+                        strcpy(message_for_client,"Message sent!\n");
+                        break;
 
-                default:
-                    break;
+                    default:
+                        break;
                 }
                 if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
                 {
@@ -743,7 +847,77 @@ void answer(void *arg)
         }
         else if (!strncmp(message_from_client, "Replay", 6)) 
         {
-
+            if (!is_logged)
+            {
+                strcpy(message_for_client, "You have to be connected if you want to use this command\nLogin\nRegister\nQuit\n");
+                if (write (tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ",tdL->idThread);
+                    perror("[Thread] Error at write(18) to the client.\n");
+                }
+            }
+            else 
+            {
+                char username_from_client[NMAX], id_msg_replay[NMAX], data[NMAX];
+                bzero(username_from_client, NMAX);
+                bzero(id_msg_replay, NMAX);
+                bzero(data, NMAX);
+                strcpy(message_for_client, "Username: ");
+                if (write (tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ",tdL->idThread);
+                    perror("[Thread] Error at write(15) to the client.\n");
+                }
+                if (read(tdL->cl, username_from_client, sizeof(username_from_client)) <= 0)
+                {
+                    printf("[Thread %d]\n",tdL->idThread);
+                    perror("Error at read(7) from the client.\n");
+                }
+                strcpy(message_for_client, "Message ID: ");
+                if (write (tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ",tdL->idThread);
+                    perror("[Thread] Error at write(15) to the client.\n");
+                }
+                if (read(tdL->cl, id_msg_replay, sizeof(id_msg_replay)) <= 0)
+                {
+                    printf("[Thread %d]\n",tdL->idThread);
+                    perror("Error at read(7) from the client.\n");
+                }
+                strcpy(message_for_client, "Text: ");
+                if (write (tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ",tdL->idThread);
+                    perror("[Thread] Error at write(16) to the client.\n");
+                }
+                if (read(tdL->cl, data, sizeof(data)) <= 0)
+                {
+                    printf("[Thread %d]\n",tdL->idThread);
+                    perror("Error at read(8) from the client.\n");
+                }
+                int ok = replay(tdL->username, username_from_client, id_msg_replay, data);
+                switch (ok)
+                {
+                    case -2:
+                        strcpy(message_for_client, "You can't replay to yourself\n");
+                        break;
+                    case -1:
+                        strcpy(message_for_client,"This user does not exist\n");
+                        break;
+                    case 0:
+                        strcpy(message_for_client,"Invalid message ID!\n");
+                        break;
+                    case 1:
+                        strcpy(message_for_client,"Replay sent!\n");
+                    default:
+                        break;
+                }
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ",tdL->idThread);
+                    perror("[Thread] Error at write(17) to the client.\n");
+                }
+            }
         }
         else if (!strncmp(message_from_client, "View messages", 13)) 
         {
@@ -759,7 +933,6 @@ void answer(void *arg)
             else 
             {
                 int ok = view_received_messages(tdL->username);
-                view_msg_status = 1;
                 if (!ok)
                     strcpy(message_for_client,"Empty inbox\n");
 
@@ -796,9 +969,20 @@ void answer(void *arg)
                     perror("Error at read(9) from the client.\n");
                 }
                 int ok = view_history(tdL->username, user_his);
-                if (ok == -1)
+                switch (ok)
+                {
+                case -1:
+                    strcpy(message_for_client, "You can't view history of yourself\n");
+                    break;
+                 case 0:
                     strcpy(message_for_client,"This user does not exist\n");
-                else strcpy(message_for_client, "Empty inbox\n");
+                    break;
+                 case 1:
+                    strcpy(message_for_client, "Empty history\n");
+                    break;
+                default:
+                    break;
+                }
                 if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
                 {
                     printf("[Thread %d] ",tdL->idThread);
@@ -813,13 +997,6 @@ void answer(void *arg)
             else 
             {
                 printf("The user %s is offline!\n", tdL->username);
-
-                if (view_msg_status)
-                {
-                    char file[NMAX];
-                    sprintf(file, "%s_received.txt", tdL->username);
-                    remove(file);
-                }
                 is_logged = 0;
                 remove_client(tdL);
                 strcpy(message_for_client, "You have successfully logout!\nLogin\nRegister\nQuit\n");
@@ -835,12 +1012,6 @@ void answer(void *arg)
             if (is_logged)
                 printf("The user %s is offline.\n", tdL->username);
             else printf("The client has been closed\n");
-            if (view_msg_status)
-            {
-                char file[NMAX];
-                sprintf(file, "%s_received.txt", tdL->username);
-                remove(file);
-            }
             is_logged = 0;
             remove_client(tdL);
             break;

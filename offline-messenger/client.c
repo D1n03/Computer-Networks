@@ -11,7 +11,7 @@
 #include <time.h>
 #include <signal.h>
 
-#define NMAX 256
+#define NMAX 1024
 
 extern int errno;
 
@@ -84,8 +84,7 @@ void write_msg()
 {
     char msg[NMAX];
     int bytes;
-    bzero(msg,NMAX);
-
+    bzero(msg, NMAX);
     while(1)
     {
         read(0, msg, sizeof(msg));
