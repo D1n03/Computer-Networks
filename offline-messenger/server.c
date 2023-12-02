@@ -35,6 +35,7 @@ void answer(void *);
 struct UserInfo {
     char username[64];
     int found;
+    int is_blacklisted;
 };
 
 int check_login_callback(void *data, int argc, char **argv, char **col_names) 
@@ -46,6 +47,9 @@ int check_login_callback(void *data, int argc, char **argv, char **col_names)
         strncpy(user_info->username, argv[0], 63);
         user_info->username[63] = '\0';
     }
+    if (argc > 1) {
+        user_info->is_blacklisted = atoi(argv[1]);
+    }
     return 0;
 }
 
@@ -54,6 +58,7 @@ int check_login_credentials(const char * email, const char * password, char * us
     sqlite3 *db;
     struct UserInfo user_info;
     user_info.found = 0;
+    user_info.is_blacklisted = 0;
     int rc = sqlite3_open(db_accounts, &db);
     if (rc != SQLITE_OK) 
     {
@@ -61,12 +66,18 @@ int check_login_credentials(const char * email, const char * password, char * us
         return errno;
     }
     char select_query[NMAX];
-    sprintf(select_query, "SELECT username FROM users WHERE email='%s' AND password='%s';", email, password);
+    sprintf(select_query, "SELECT username, blacklist FROM users WHERE email='%s' AND password='%s';", email, password);
 
     sqlite3_exec(db, select_query, check_login_callback, &user_info, 0);
     sqlite3_close(db);
     strncpy(username, user_info.username, 64);
-    return user_info.found;
+    if (!user_info.found)
+        return 0;
+    else if (user_info.found && !user_info.is_blacklisted)
+        return 1;
+    else if (user_info.found && user_info.is_blacklisted)
+        return 2;
+    return -1;
 }
 
 int check_existing_callback(void *exists, int argc, char **argv, char **col_names) 
@@ -97,6 +108,47 @@ int check_existing(sqlite3 *db, const char *field, const char *value) // check i
     return exists_flag;
 }
 
+void insert_admin()
+{
+    sqlite3 *db;
+    int rc = sqlite3_open(db_accounts, &db);
+    if (rc != SQLITE_OK) 
+    {
+        fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
+        perror("[server] Error at sqlite3_open.\n");
+    }
+    char *create_table_query = "CREATE TABLE IF NOT EXISTS users ("
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                        "username TEXT NOT NULL,"
+                        "email TEXT NOT NULL,"
+                        "password TEXT NOT NULL,"
+                        "blacklist INTEGER NOT NULL);";
+
+    rc = sqlite3_exec(db, create_table_query, 0, 0, 0);
+
+    if (rc != SQLITE_OK) 
+    {
+        fprintf(stderr, "Failed to create table: %s\n", sqlite3_errmsg(db));
+        perror("[server] Error at sqlite3_create.\n");
+        sqlite3_close(db);
+    }  
+    if (!check_existing(db, "username", "admin") && !check_existing(db, "email", "admin@admin.com"))
+    {
+        char insert_query[NMAX];
+        sprintf(insert_query, "INSERT INTO users (username, email, password, blacklist) VALUES ('%s', '%s', '%s', '%d');", "admin", "admin@admin.com", "123", 0);
+        rc = sqlite3_exec(db, insert_query, 0, 0, 0);
+        if (rc != SQLITE_OK) 
+        {
+            fprintf(stderr, "Failed to insert data: %s\n", sqlite3_errmsg(db));
+            perror("[server] Error at sqlite3_exec.\n");
+            sqlite3_close(db);
+        }
+        printf("[server] Admin inserted successfully!\n");
+    }
+    else printf("[server] Admin is already in database.\n");
+    sqlite3_close(db);
+}
+
 int register_account(const char* username, const char * email, const char * password)
 {
     if (!strlen(username) || strchr(username, ' '))
@@ -115,10 +167,11 @@ int register_account(const char* username, const char * email, const char * pass
         return errno;
     }
     char *create_table_query = "CREATE TABLE IF NOT EXISTS users ("
-                        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                        "username TEXT NOT NULL,"
-                        "email TEXT NOT NULL,"
-                        "password TEXT NOT NULL);";
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    "username TEXT NOT NULL,"
+                    "email TEXT NOT NULL,"
+                    "password TEXT NOT NULL,"
+                    "blacklist INTEGER NOT NULL);";
 
     rc = sqlite3_exec(db, create_table_query, 0, 0, 0);
 
@@ -130,20 +183,20 @@ int register_account(const char* username, const char * email, const char * pass
         return errno;
     } 
 
-    if (!check_existing(db, "username", username))
+    if (check_existing(db, "username", username))
     {
         sqlite3_close(db);
         return 0;
     }
 
-    if (!check_existing(db, "email", email))
+    if (check_existing(db, "email", email))
     {
         sqlite3_close(db);
         return 1;
     }
     
     char insert_query[NMAX];
-    sprintf(insert_query, "INSERT INTO users (username, email, password) VALUES ('%s', '%s', '%s');", username, email, password);
+    sprintf(insert_query, "INSERT INTO users (username, email, password, blacklist) VALUES ('%s', '%s', '%s', '%d');", username, email, password, 0);
     rc = sqlite3_exec(db, insert_query, 0, 0, 0);
     if (rc != SQLITE_OK) 
     {
@@ -527,8 +580,79 @@ int get_nr_of_unread_msg(const char * username)
     return count;
 }
 
+int blacklist_user(const char* username)
+{
+    if (!strncmp(username, "admin", 6))
+        return -1;
+    if (!exist(username))
+        return 0;
+    sqlite3 * db;
+    int rc = sqlite3_open(db_accounts, &db);
+
+    if (rc != SQLITE_OK) 
+    {
+        fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
+        perror("[server] Error at sqlite3_open.\n");
+        return errno;
+    }
+
+    char query[NMAX];
+    bzero(query, NMAX);
+    snprintf(query, sizeof(query), "UPDATE users SET blacklist = 1 WHERE username = '%s';", username);
+
+    rc = sqlite3_exec(db, query, 0, 0, 0);
+
+    if (rc != SQLITE_OK) 
+    {
+        fprintf(stderr, "Failed to update data: %s\n", sqlite3_errmsg(db));
+        perror("[server] Error at sqlite3_exec.\n");
+        sqlite3_close(db);
+        return errno;
+    }
+
+    // Close the database
+    sqlite3_close(db);
+    return 1;
+}
+
+int whitelist_user(const char* username)
+{
+    if (!strncmp(username, "admin", 6))
+        return -1;
+    if (!exist(username))
+        return 0;
+    sqlite3 * db;
+    int rc = sqlite3_open(db_accounts, &db);
+
+    if (rc != SQLITE_OK) 
+    {
+        fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
+        perror("[server] Error at sqlite3_open.\n");
+        return errno;
+    }
+
+    char query[NMAX];
+    bzero(query, NMAX);
+    snprintf(query, sizeof(query), "UPDATE users SET blacklist = 0 WHERE username = '%s';", username);
+
+    rc = sqlite3_exec(db, query, 0, 0, 0);
+
+    if (rc != SQLITE_OK) 
+    {
+        fprintf(stderr, "Failed to update data: %s\n", sqlite3_errmsg(db));
+        perror("[server] Error at sqlite3_exec.\n");
+        sqlite3_close(db);
+        return errno;
+    }
+
+    // Close the database
+    sqlite3_close(db);
+    return 1;
+}
+
 int main ()
 {
+    insert_admin();
     struct sockaddr_in server;
     struct sockaddr_in from;	
     int sd; 
@@ -600,7 +724,7 @@ void answer(void *arg)
 {
 	struct thData *tdL; 
 	tdL = (struct thData*)arg;
-    int bytes, is_logged = 0;
+    int bytes, is_logged = 0, is_admin = 0;
     while (1)
     {
         bzero(message_from_client, NMAX);
@@ -642,7 +766,7 @@ void answer(void *arg)
                 }
                 char *username = malloc(64);
                 int result = check_login_credentials(email, password, username);
-                if (result)
+                if (result == 1)
                 {
                     int connected = 0;
                     for (int i = 0; i < 100; i++)
@@ -654,6 +778,8 @@ void answer(void *arg)
                     {
                         add_client(tdL);
                         is_logged = 1;
+                        if (!strncmp("admin", username, 6))
+                            is_admin = 1;
                         strcpy(tdL->username, username);
 
                         int unread_cnt = get_nr_of_unread_msg(username);
@@ -669,7 +795,11 @@ void answer(void *arg)
                         printf("The user %s is online.\n", tdL->username);
                     }
                 }
-                else
+                else if (result == 2)
+                {
+                    strncpy(message_for_client, "The account is blacklisted!\n", 29);
+                }
+                else if (!result)
                 {
                     strncpy(message_for_client, "Failed to login. Wrong email or password!\n", 43);
                 }
@@ -755,7 +885,7 @@ void answer(void *arg)
                         break;
 
                     case 2:  
-                        strncpy(tdL->username, username, strlen(username));
+                        strncpy(tdL->username, username, 64);
                         strncpy(message_for_client, "The account has been created succesfully!\n", 43);
 
                         printf("The account with the username %s and email %s has been created.\n", tdL->username, email);
@@ -883,7 +1013,7 @@ void answer(void *arg)
                 }
             }
         }
-        else if (!strncmp(message_from_client, "Reply", 6)) // replay to a specific message from a user by providing a username, the id of the message and the replay's message
+        else if (!strncmp(message_from_client, "Reply", 6)) // reply to a specific message from a user by providing an username, id of the message and the reply's message
         {
             if (!is_logged)
             {
@@ -1009,17 +1139,17 @@ void answer(void *arg)
                 int ok = view_history(tdL->username, user_his);
                 switch (ok)
                 {
-                case -1:
-                    strncpy(message_for_client, "You can't view history of yourself\n", 36);
-                    break;
-                 case 0:
-                    strncpy(message_for_client,"This user does not exist\n", 26);
-                    break;
-                 case 1:
-                    strncpy(message_for_client, "Empty history\n", 15);
-                    break;
-                default:
-                    break;
+                    case -1:
+                        strncpy(message_for_client, "You can't view history of yourself\n", 36);
+                        break;
+                    case 0:
+                        strncpy(message_for_client,"This user does not exist\n", 26);
+                        break;
+                    case 1:
+                        strncpy(message_for_client, "Empty history\n", 15);
+                        break;
+                    default:
+                        break;
                 }
                 if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
                 {
@@ -1036,6 +1166,7 @@ void answer(void *arg)
             {
                 printf("The user %s is offline!\n", tdL->username);
                 is_logged = 0;
+                is_admin = 0;
                 remove_client(tdL);
                 strncpy(message_for_client, "You have successfully logout!\nLogin\nRegister\nQuit\n", 51);
             }
@@ -1045,12 +1176,125 @@ void answer(void *arg)
                 perror("[Thread] Error at write(23) to the client.\n");
             }
         }
+        else if (!strncmp(message_from_client, "Blacklist", 9))
+        {
+            if (!is_logged)
+            {
+                strncpy(message_for_client, "You are not connected!\nLogin\nRegister\nQuit\n", 44);
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ", tdL->idThread);
+                    perror("[Thread] Error at write(24) to the client.\n");
+                }
+            }
+            else if (is_logged && !is_admin)
+            {
+                strncpy(message_for_client, "You are not an admin!\nLogin\nRegister\nQuit\n", 44);
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ", tdL->idThread);
+                    perror("[Thread] Error at write(25) to the client.\n");
+                }
+            }
+            else if (is_logged && is_admin)
+            {
+                char username_from_client[NMAX];
+                strncpy(message_for_client, "Username: ", 11);
+                if (write (tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ", tdL->idThread);
+                    perror("[Thread] Error at write(26) to the client.\n");
+                }
+                if (read(tdL->cl, username_from_client, sizeof(username_from_client)) <= 0)
+                {
+                    printf("[Thread %d]\n", tdL->idThread);
+                    perror("Error at read(10) from the client.\n");
+                }
+                int ok = blacklist_user(username_from_client);
+                switch (ok)
+                {
+                    case -1:
+                        strncpy(message_for_client, "You can't blacklist the admin\n", 31);
+                        break;
+                    case 0:
+                        strncpy(message_for_client, "This user does not exist\n", 26);
+                        break;
+                    case 1:
+                        strncpy(message_for_client, "Blacklist succesuful\n", 22);
+                        break;
+                    default:
+                        break;
+                }
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ", tdL->idThread);
+                    perror("[Thread] Error at write(27) to the client.\n");
+                }
+            }
+        }
+        else if (!strncmp(message_from_client, "Whitelist", 9))
+        {
+            if (!is_logged)
+            {
+                strncpy(message_for_client, "You are not connected!\nLogin\nRegister\nQuit\n", 44);
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ", tdL->idThread);
+                    perror("[Thread] Error at write(28) to the client.\n");
+                }
+            }
+            else if (is_logged && !is_admin)
+            {
+                strncpy(message_for_client, "You are not an admin!\nLogin\nRegister\nQuit\n", 44);
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ", tdL->idThread);
+                    perror("[Thread] Error at write(29) to the client.\n");
+                }
+            }
+            else if (is_logged && is_admin)
+            {
+                char username_from_client[NMAX];
+                strncpy(message_for_client, "Username: ", 11);
+                if (write (tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ", tdL->idThread);
+                    perror("[Thread] Error at write(30) to the client.\n");
+                }
+                if (read(tdL->cl, username_from_client, sizeof(username_from_client)) <= 0)
+                {
+                    printf("[Thread %d]\n", tdL->idThread);
+                    perror("Error at read(11) from the client.\n");
+                }
+                int ok = whitelist_user(username_from_client);
+                switch (ok)
+                {
+                    case -1:
+                        strncpy(message_for_client, "You can't whitelist the admin\n", 31);
+                        break;
+                    case 0:
+                        strncpy(message_for_client, "This user does not exist\n", 26);
+                        break;
+                    case 1:
+                        strncpy(message_for_client, "Whitelist succesuful\n", 22);
+                        break;
+                    default:
+                        break;
+                }
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                {
+                    printf("[Thread %d] ", tdL->idThread);
+                    perror("[Thread] Error at write(31) to the client.\n");
+                }
+            }
+        }
         else if (!strncmp(message_from_client, "Quit", 4)) // Quit the client
         {
             if (is_logged)
                 printf("The user %s is offline.\n", tdL->username);
             else printf("The client has been closed\n");
             is_logged = 0;
+            is_admin = 0;
             remove_client(tdL);
             break;
         }
@@ -1060,7 +1304,7 @@ void answer(void *arg)
             if (write (tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
             {
                 printf("[Thread %d] ", tdL->idThread);
-                perror("[Thread] Error at write(24) to the client.\n");
+                perror("[Thread] Error at write(32) to the client.\n");
             }
             else printf("[Thread %d] The message has been sent successfully.\n", tdL->idThread);	
         }
@@ -1070,4 +1314,3 @@ void answer(void *arg)
 
 // TODO
 // test, test and test
-// admin delete account from database and blacklist the email
