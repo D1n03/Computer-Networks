@@ -18,30 +18,30 @@ extern int errno;
 int port;
 int sd;
 
-void write_msg();
-void read_msg();
+void send_command();
+void receive_command();
 
 void intHandler(int get) // if the client is forced to be closed
 {
-    int bytes;
-    if((bytes = write(sd, "Quit", sizeof("Quit"))) <= 0)
+    if(write(sd, "Quit", sizeof("Quit")) <= 0)
     {
         perror("[client] Error at write(1) to server.\n");
+        exit(1);
     }
     close(sd);
     exit(0);
 }
 
-int main (int argc, char *argv[])
+int main(int argc, char *argv[])
 {
     signal(SIGINT, intHandler);
     struct sockaddr_in server;
-    pthread_t send_thread, recv_thread;
+    pthread_t send_thread, receive_thread;
 
     if (argc != 3)
     {
         printf ("Syntax: %s <server_adress> <port>\n", argv[0]);
-        return -1;
+        exit(1);
     }
     port = atoi(argv[2]);
     if ((sd = socket (AF_INET, SOCK_STREAM, 0)) == -1)
@@ -54,24 +54,24 @@ int main (int argc, char *argv[])
     server.sin_addr.s_addr = inet_addr(argv[1]);
     server.sin_port = htons(port);
     
-    if (connect (sd, (struct sockaddr *) &server,sizeof (struct sockaddr)) == -1)
+    if (connect(sd,(struct sockaddr *)&server, sizeof(struct sockaddr)) == -1)
     {
-        perror ("[client]Error at connect().\n");
+        perror("[client]Error at connect().\n");
         return errno;
     }
 
     printf("Login\n");
     printf("Register\n");
+    printf("Help\n");
     printf("Quit\n");   
     fflush(stdout);
 
-    if(pthread_create(&send_thread, NULL, (void *)write_msg, NULL)!=0)
+    if(pthread_create(&send_thread, NULL, (void *)send_command, NULL) != 0)
     {
         printf("[client] Error at pthread-create(1).\n");
         return errno;
     }
-
-    if(pthread_create(&recv_thread, NULL, (void *)read_msg, NULL)!=0)
+    if(pthread_create(&receive_thread, NULL, (void *)receive_command, NULL) != 0)
     {
         printf("[client] Error at pthread-create(2).\n");
         return errno;
@@ -80,51 +80,52 @@ int main (int argc, char *argv[])
     close (sd);
 }
 
-void write_msg()
+void send_command()
 {
-    char msg[NMAX];
-    int bytes;
-    bzero(msg, NMAX);
+    char command[NMAX];
+    bzero(command, NMAX);
     while(1)
     {
-        read(0, msg, sizeof(msg));
-        msg[strlen(msg) - 1] = '\0';
-        if(strncmp(msg, "Quit", 4) == 0)
+        read(0, command, sizeof(command));
+        command[strlen(command) - 1] = '\0';
+        if(!strncmp(command, "Quit", 4))
         {
-            if((bytes = write(sd, msg, sizeof(msg))) <= 0)
+            if(write(sd, command, sizeof(command)) <= 0)
             {
                 perror("[client] Error at write(1) to server.\n");
+                exit(1);
             }
             close(sd);
             exit(0);
         }
         else
         {
-            if((bytes = write(sd, msg, sizeof(msg))) <= 0)
+            if(write(sd, command, sizeof(command)) <= 0)
             {
                 perror("Error writing to server.\n");
+                exit(1);
             }
         }
-        bzero(msg, NMAX);
+        bzero(command, NMAX);
     }
 }
 
-void read_msg()
+void receive_command()
 {
-    char msg[NMAX];
-    int bytes;
-    bzero(msg, NMAX);
+    char command_output[NMAX];
+    bzero(command_output, NMAX);
     while(1)
     {
-        if((bytes = read(sd, msg, sizeof(msg))) <= 0)
+        if(read(sd, command_output, sizeof(command_output)) <= 0)
         {
             perror("[client] Eroare la read(1) de la server.\n");
+            exit(1);
         }
         else
         {
-            printf("%s", msg); 
+            printf("%s", command_output); 
             fflush(stdout);
         }
-        bzero(msg, NMAX);
+        bzero(command_output, NMAX);
     }
 }

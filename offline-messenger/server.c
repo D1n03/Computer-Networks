@@ -423,7 +423,7 @@ int reply(const char* from_username, const char* to_username, const char* id_msg
     return ok;
 }
 
-int view_received_messages(const char* username)
+int view_received_messages(int cl, int idThread, const char* username)
 {
     sqlite3 * db;
     int rc = sqlite3_open(db_mess, &db);
@@ -459,9 +459,13 @@ int view_received_messages(const char* username)
         char formatted_answer[NMAX];
         bzero(formatted_answer, NMAX);
         sprintf(formatted_answer, "[id_msg : %d] [user: %s] : %s", id_msg, from_username, data);
-        strcat(message_for_client, formatted_answer);
+        strncpy(message_for_client, formatted_answer, 1024);
         strcat(message_for_client, "\n");
-
+        if (write(cl, message_for_client, sizeof(message_for_client)) <= 0) // this part is so that we will read all the data base even though if greater than 1024
+        {
+            printf("[Thread %d] ", idThread);
+            perror("[Thread] Error at write(22) to the client.\n");
+        }
         snprintf(query, sizeof(query), "UPDATE messages SET view = 1 WHERE id_msg = %d", id_msg);
         rc = sqlite3_exec(db, query, 0, 0, 0);
         if (rc != SQLITE_OK) 
@@ -477,7 +481,7 @@ int view_received_messages(const char* username)
     return ok;
 }
 
-int view_history(const char* from_username, const char* to_username)
+int view_history(int cl, int idThread, const char* from_username, const char* to_username)
 {
     if (!strcmp(from_username, to_username))
         return -1;
@@ -513,8 +517,6 @@ int view_history(const char* from_username, const char* to_username)
     sqlite3_bind_text(stmt, 4, from_username, -1, SQLITE_STATIC);
 
     int ok = 0;
-    char aux[NMAX];
-    bzero(aux, NMAX);
     while (sqlite3_step(stmt) == SQLITE_ROW) 
     {
         int id_msg = sqlite3_column_int(stmt, 0);
@@ -524,9 +526,16 @@ int view_history(const char* from_username, const char* to_username)
         char formatted_answer[NMAX];
         bzero(formatted_answer, NMAX);
         snprintf(formatted_answer, NMAX, "[id_msg : %d] [user: %s] : %s", id_msg, from_user, data);
+        char aux[NMAX];
+        bzero(aux, NMAX);
         strcat(aux, formatted_answer);
         strcat(aux, "\n");
-
+        strcpy(message_for_client, aux);
+        if (write(cl, message_for_client, sizeof(message_for_client)) <= 0) // this part is so that we will read all the data base even though if greater than 1024
+        {
+            printf("[Thread %d] ", idThread);
+            perror("[Thread] Error at write(22) to the client.\n");
+        }
         snprintf(query, sizeof(query), "UPDATE messages SET view = 1 WHERE id_msg = %d", id_msg);
         rc = sqlite3_exec(db, query, 0, 0, 0);
         if (rc != SQLITE_OK) 
@@ -536,7 +545,6 @@ int view_history(const char* from_username, const char* to_username)
         }
         ok = 1;
     }
-    strcpy(message_for_client, aux);
     sqlite3_finalize(stmt);
     sqlite3_close(db);
 
@@ -610,7 +618,6 @@ int blacklist_user(const char* username)
         return errno;
     }
 
-    // Close the database
     sqlite3_close(db);
     return 1;
 }
@@ -645,7 +652,6 @@ int whitelist_user(const char* username)
         return errno;
     }
 
-    // Close the database
     sqlite3_close(db);
     return 1;
 }
@@ -724,11 +730,11 @@ void answer(void *arg)
 {
 	struct thData *tdL; 
 	tdL = (struct thData*)arg;
-    int bytes, is_logged = 0, is_admin = 0;
+    int is_logged = 0, is_admin = 0;
     while (1)
     {
         bzero(message_from_client, NMAX);
-        if ((bytes = read(tdL->cl, message_from_client, sizeof(message_from_client))) <= 0)
+        if (read(tdL->cl, message_from_client, sizeof(message_from_client)) <= 0)
         {
             printf("[Thread %d] ",tdL->idThread);
 		    perror("[Thread] Error at read(1) to the client.\n");
@@ -743,23 +749,23 @@ void answer(void *arg)
                 bzero(email, NMAX);
                 bzero(password, NMAX);
                 strncpy(message_for_client, "Insert email: ", 15);
-                if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror("Error at write(1) to the client.\n");
                 }
-                if ((bytes = read(tdL->cl, email, sizeof(email))) <= 0)
+                if (read(tdL->cl, email, sizeof(email)) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror("Error at read(2) from the client.\n");
                 }
                 strncpy(message_for_client, "Insert password: ", 18);
-                if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror("Error at write(2) to the client.\n");
                 }
-                if ((bytes = read(tdL->cl, password, sizeof(password))) <= 0)
+                if (read(tdL->cl, password, sizeof(password)) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror("Error at read(3) from the client.\n");
@@ -803,7 +809,7 @@ void answer(void *arg)
                 {
                     strncpy(message_for_client, "Failed to login. Wrong email or password!\n", 43);
                 }
-                if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror ("Error at write(3) to the client.\n");
@@ -813,7 +819,7 @@ void answer(void *arg)
             else 
             {
                 strncpy(message_for_client, "You are already connected with another account\n", 48);
-                if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror ("Error at write(4) to the client.\n");
@@ -829,34 +835,34 @@ void answer(void *arg)
                 bzero(email, NMAX);
                 bzero(password, NMAX);
                 strncpy(message_for_client, "Insert username: ", 18);
-                if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror ("Error at write(5) to the client.\n");
                 }
-                if ((bytes = read(tdL->cl, username, sizeof(username))) <= 0)
+                if (read(tdL->cl, username, sizeof(username)) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror("Error at read(4) from the client.\n");
                 }
                 strncpy(message_for_client, "Insert email: ", 15);
-                if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror("Error at write(6) to the client.\n");
                 }
-                if ((bytes = read(tdL->cl, email, sizeof(email))) <= 0)
+                if (read(tdL->cl, email, sizeof(email)) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror("Error at read(5) from the client.\n");
                 }
                 strncpy(message_for_client, "Insert password: ", 18);
-                if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror("Error at write(7) to the client.\n");
                 }
-                if ((bytes = read(tdL->cl, password, sizeof(password))) <= 0)
+                if (read(tdL->cl, password, sizeof(password)) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror("Error at read(6) from the client.\n");
@@ -894,7 +900,7 @@ void answer(void *arg)
                     default:
                         break;
                 }
-                if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror("Error at write(8) to the client.\n");
@@ -903,7 +909,7 @@ void answer(void *arg)
             else 
             {
                 strncpy(message_for_client, "Logout from the current account if you want to create a new one.\n", 66);
-                if ((bytes = write(tdL->cl, message_for_client, sizeof(message_for_client))) <= 0)
+                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
                 {
                     printf("[Thread %d]\n",tdL->idThread);
                     perror("Error at write(9) to the client.\n");
@@ -1100,14 +1106,14 @@ void answer(void *arg)
             }
             else 
             {
-                int ok = view_received_messages(tdL->username);
-                if (!ok)
+                int ok = view_received_messages(tdL->cl, tdL->idThread, tdL->username);
+                if (!ok) {
                     strncpy(message_for_client, "Empty inbox\n", 13);
-
-                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
-                {
-                    printf("[Thread %d] ", tdL->idThread);
-                    perror("[Thread] Error at write(19) to the client.\n");
+                    if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                    {
+                        printf("[Thread %d] ", tdL->idThread);
+                        perror("[Thread] Error at write(19) to the client.\n");
+                    }
                 }
             }
         }
@@ -1136,7 +1142,7 @@ void answer(void *arg)
                     printf("[Thread %d]\n", tdL->idThread);
                     perror("Error at read(9) from the client.\n");
                 }
-                int ok = view_history(tdL->username, user_his);
+                int ok = view_history(tdL->cl, tdL->idThread, tdL->username, user_his);
                 switch (ok)
                 {
                     case -1:
@@ -1151,11 +1157,12 @@ void answer(void *arg)
                     default:
                         break;
                 }
-                if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
-                {
-                    printf("[Thread %d] ", tdL->idThread);
-                    perror("[Thread] Error at write(22) to the client.\n");
-                }
+                if (ok < 2)
+                    if (write(tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+                    {
+                        printf("[Thread %d] ", tdL->idThread);
+                        perror("[Thread] Error at write(22) to the client.\n");
+                    }
             }
         }
         else if (!strncmp(message_from_client, "Logout", 6)) // Logout from the account 
@@ -1288,6 +1295,15 @@ void answer(void *arg)
                 }
             }
         }
+        else if (!strncmp(message_from_client, "Help", 4)) // diplays all the accepted commands
+        {
+            strncpy(message_for_client, "\n- Login\n- Register\n- Send\n- Reply\n- Get users\n- Get online users\n- History\n- View messages\n- Blacklist (admin only)\n- Whitelist (admin only)\n- Logout\n- Quit\n\n", 160);
+            if (write (tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
+            {
+                printf("[Thread %d] ", tdL->idThread);
+                perror("[Thread] Error at write(32) to the client.\n");
+            }
+        }
         else if (!strncmp(message_from_client, "Quit", 4)) // Quit the client
         {
             if (is_logged)
@@ -1304,13 +1320,10 @@ void answer(void *arg)
             if (write (tdL->cl, message_for_client, sizeof(message_for_client)) <= 0)
             {
                 printf("[Thread %d] ", tdL->idThread);
-                perror("[Thread] Error at write(32) to the client.\n");
+                perror("[Thread] Error at write(33) to the client.\n");
             }
             else printf("[Thread %d] The message has been sent successfully.\n", tdL->idThread);	
         }
         bzero(message_for_client, NMAX);
     }
 }
-
-// TODO
-// test, test and test
