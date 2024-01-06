@@ -563,6 +563,24 @@ int get_nr_of_unread_msg(const char * username)
         perror("[server] Error at sqlite3_open.\n");
     }  
 
+    char *create_table_query = "CREATE TABLE IF NOT EXISTS messages ("
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                        "id_msg INTEGER NOT NULL,"
+                        "from_user TEXT NOT NULL,"
+                        "to_user TEXT NOT NULL,"
+                        "data TEXT NOT NULL,"
+                        "view INTEGER NOT NULL);";
+
+    rc = sqlite3_exec(db, create_table_query, 0, 0, 0);
+
+    if (rc != SQLITE_OK) 
+    {
+        fprintf(stderr, "Failed to create table: %s\n", sqlite3_errmsg(db));
+        perror("[server] Error at sqlite3_create.\n");
+        sqlite3_close(db);
+        return errno;
+    } 
+
     char query[NMAX];
     bzero(query, NMAX);
     snprintf(query, sizeof(query), "SELECT COUNT(*) FROM messages WHERE to_user = ? AND view = 0");
@@ -583,7 +601,6 @@ int get_nr_of_unread_msg(const char * username)
         count = sqlite3_column_int(stmt, 0);
     }
     sqlite3_finalize(stmt);
-
     sqlite3_close(db);
     return count;
 }
@@ -1227,7 +1244,7 @@ void answer(void *arg)
                         strncpy(message_for_client, "This user does not exist\n", 26);
                         break;
                     case 1:
-                        strncpy(message_for_client, "Blacklist succesuful\n", 22);
+                        strncpy(message_for_client, "Blacklist successful\n", 22);
                         break;
                     default:
                         break;
@@ -1283,7 +1300,7 @@ void answer(void *arg)
                         strncpy(message_for_client, "This user does not exist\n", 26);
                         break;
                     case 1:
-                        strncpy(message_for_client, "Whitelist succesuful\n", 22);
+                        strncpy(message_for_client, "Whitelist successful\n", 22);
                         break;
                     default:
                         break;
