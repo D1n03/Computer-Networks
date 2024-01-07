@@ -437,7 +437,7 @@ int view_received_messages(int cl, int idThread, const char* username)
 
     char query[NMAX];
     bzero(query, NMAX);
-    snprintf(query, sizeof(query), "SELECT id_msg, from_user, data FROM messages WHERE to_user = ? AND view = 0");
+    snprintf(query, sizeof(query), "SELECT id, id_msg, from_user, data FROM messages WHERE to_user = ? AND view = 0");
 
     sqlite3_stmt *stmt;
 
@@ -453,9 +453,10 @@ int view_received_messages(int cl, int idThread, const char* username)
 
     while (sqlite3_step(stmt) == SQLITE_ROW) 
     {
-        int id_msg = sqlite3_column_int(stmt, 0);
-        const char *from_username = (const char *)sqlite3_column_text(stmt, 1);
-        const char *data = (const char *)sqlite3_column_text(stmt, 2);
+        int unique_id = sqlite3_column_int(stmt, 0); // we also need the first id because there are cases in which the id_msg is not unique
+        int id_msg = sqlite3_column_int(stmt, 1);
+        const char *from_username = (const char *)sqlite3_column_text(stmt, 2);
+        const char *data = (const char *)sqlite3_column_text(stmt, 3);
         char formatted_answer[NMAX];
         bzero(formatted_answer, NMAX);
         sprintf(formatted_answer, "[id_msg : %d] [user: %s] : %s", id_msg, from_username, data);
@@ -466,7 +467,7 @@ int view_received_messages(int cl, int idThread, const char* username)
             printf("[Thread %d] ", idThread);
             perror("[Thread] Error at write(22) to the client.\n");
         }
-        snprintf(query, sizeof(query), "UPDATE messages SET view = 1 WHERE id_msg = %d", id_msg);
+        snprintf(query, sizeof(query), "UPDATE messages SET view = 1 WHERE id_msg = %d AND id = %d", id_msg, unique_id);
         rc = sqlite3_exec(db, query, 0, 0, 0);
         if (rc != SQLITE_OK) 
         {
