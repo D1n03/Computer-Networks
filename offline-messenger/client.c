@@ -118,7 +118,7 @@ void receive_command()
     {
         if(read(sd, command_output, sizeof(command_output)) <= 0)
         {
-            perror("[client] Eroare la read(1) de la server.\n");
+            perror("[client] Error at read(1) from server.\n");
             exit(1);
         }
         else
